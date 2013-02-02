@@ -1,17 +1,132 @@
 module DatomicHTTP where
 
-import Network.HTTP (simpleHTTP,getResponseBody,postRequestWithBody,getRequest)
-import Network.HTTP.Base (Request(Request),RequestMethod(GET,POST),Response,urlEncodeVars,urlEncode,setRequestBody)
-import Network.HTTP.Headers (Header,HeaderName(HdrAccept,HdrContentType),mkHeader,insertHeader)
-import Network.URI (parseURI,URI,relativeTo,parseRelativeReference)
-import Network.Stream (Result)
-import Data.Maybe (fromJust)
+import Network.URI
+import Network.HTTP
+import Network.Stream
+import qualified Data.EDN as EDN
+import qualified Data.EDN.Parser as EDN
+
+import Data.Maybe
+
+import Control.Error
+
+import Control.Monad.Trans
+
+import Data.Attoparsec.Lazy
+
+import Data.ByteString.Lazy
+
+import qualified Data.Text.Lazy as T
+import qualified Data.Text.Lazy.Builder as T
+
+import qualified Data.EDN.Encode as EDN
+
+-- DATA
+
+-- STORAGE
+
+createDatabase :: Connection -> DatabaseName -> IO Bool
+createDatabase = undefined
+
+-- DATABASE
+
+permalink :: Connection -> DatabaseName -> Database
+permalink = undefined
+
+latest :: Connection -> DatabaseName -> Database
+latest = undefined
+
+--wtf datoms :: 
+
+data EntityID = EntityID
+
+data EntityMap = EntityMap
+
+entity :: Database -> EntityID -> EntityMap
+entity = undefined
+
+--wtf events ::
+
+type ServerAddress = URI
+
+data StorageName = StorageName String
+
+data DatabaseName = DatabaseName String
+
+data Database = Database
+
+data Transaction = Transaction
+
+data TransactionError = TransactionError
+
+data TransactionResult = TransactionResult
+
+transact :: ServerAddress -> StorageName -> Transaction -> IO (Either TransactionError TransactionResult)
+transact = undefined
+
+-- API
+
+type Query = EDN.TaggedValue
+
+type QueryInput = EDN.TaggedValue
+
+data QueryError = ConnectionError ConnError |
+                  BodyRetrievalError String |
+                  BodyParseError String |
+                  UrlParseError deriving Show
+
+type QueryResult = EDN.TaggedValue
+
+q :: ServerAddress -> Query -> QueryInput -> IO (Either QueryError QueryResult)
+q serveraddress query queryinput = runEitherT $ do
+    let ednToString = T.unpack . T.toLazyText . EDN.fromTagged
+        querystring = ednToString query
+        inputstring = ednToString queryinput
+        req = insertHeader HdrAccept "application/edn" (mkRequest GET uri)
+        uri = parameters `relativeTo` apiSlashQuery `relativeTo` serveraddress
+        Just apiSlashQuery = parseRelativeReference "api/query"
+        Just parameters = parseRelativeReference ("?" ++ urlEncodeVars
+         [("q",querystring),
+         ("args",inputstring),
+         ("offset",""),
+         ("limit","")])
+    response <- lift (simpleHTTP req)
+    result <- hoistEither response `onFailure` ConnectionError
+    body <- scriptIO (getResponseBody (Right result)) `onFailure` BodyRetrievalError
+    --check response code
+    hoistEither (eitherResult (EDN.parseBSL body)) `onFailure` BodyParseError
+
+onFailure :: Monad m => EitherT a m r -> (a -> b) -> EitherT b m r
+onFailure = flip fmapLT
+    
+
+
+testAddress :: URI
+testAddress = fromJust (parseURI "http://127.0.0.1:9834")
+
+Just testQuery = maybeResult (EDN.parseS "[:find ?e ?v :in $ :where [?e :db/doc ?v]]")
+
+Just testQueryInput = maybeResult (EDN.parseS "[{:db/alias \"whatup/tst\"}]")
+
+
+main :: IO ()
+main = q testAddress testQuery testQueryInput >>= print
+
+
+
+
+
+
+{-
 
 data Location = Location URI String String
 
 type Transaction = String
 
 type Query = String
+
+
+
 
 transact :: Location -> Transaction -> IO (Result (Response String))
 transact (Location server storage database) transaction = simpleHTTP request where
@@ -42,5 +157,6 @@ test2 = transact (Location server storage database) "[{:db/id #db/id[:db.part/us
 main :: IO ()
 main = print "hello"
     
+-}
 
 

@@ -15,5 +15,6 @@ cabal-version:       >=1.10
 library
   -- exposed-modules:     
   -- other-modules:       
-  build-depends:       base ==4.6.*
+  build-depends:       base,
+                       hedn
   default-language:    Haskell2010

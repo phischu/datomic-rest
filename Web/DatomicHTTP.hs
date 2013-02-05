@@ -82,24 +82,27 @@ type QueryResult = EDN.TaggedValue
 
 q :: ServerAddress -> Query -> QueryInput -> IO (Either QueryError QueryResult)
 q serveraddress query queryinput = runEitherT $ do
+
     let ednToString = T.unpack . T.toLazyText . EDN.fromTagged
         querystring = ednToString query
         inputstring = ednToString queryinput
+
     apiSlashQuery <- noteT UrlParseError (hoistMaybe (parseRelativeReference "api/query"))
-    parameters <- noteT UrlParseError (hoistMaybe (parseRelativeReference ("?" ++ urlEncodeVars
+    parameters    <- noteT UrlParseError (hoistMaybe (parseRelativeReference ("?" ++ urlEncodeVars
          [("q",querystring),
          ("args",inputstring),
          ("offset",""),
          ("limit","")])))
+
     let req = insertHeader HdrAccept "application/edn" (mkRequest GET uri)
         uri = parameters `relativeTo` apiSlashQuery `relativeTo` serveraddress
+
     response <- lift (simpleHTTP req)
-    result <- hoistEither response `onFailure` ConnectionError
-    code <- scriptIO (getResponseCode (Right result)) `onFailure` RetrievalError
+    result   <- hoistEither response                      `onFailure` ConnectionError
+    code     <- scriptIO (getResponseCode (Right result)) `onFailure` RetrievalError
     when (code /= (2,0,0)) (left (ResponseCodeError code))
-    --TODO extrace more information if response code indicates an error
-    body <- scriptIO (getResponseBody (Right result)) `onFailure` RetrievalError
-    hoistEither (eitherResult (EDN.parseBSL body)) `onFailure` BodyParseError
+    body     <- scriptIO (getResponseBody (Right result)) `onFailure` RetrievalError
+    hoistEither (eitherResult (EDN.parseBSL body))        `onFailure` BodyParseError
 
 onFailure :: Monad m => EitherT a m r -> (a -> b) -> EitherT b m r
 onFailure = flip fmapLT

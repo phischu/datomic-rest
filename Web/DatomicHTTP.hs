@@ -49,22 +49,59 @@ entity = undefined
 
 --wtf events ::
 
+data InteractionError = UnexpectedError String |
+                        ConnectionError ConnError |
+                        RetrievalError String deriving Show
+
+type Body s = s
+
+webInteract :: (HStream s) => Request s -> EitherT InteractionError IO (ResponseCode,Body s)
+webInteract request = do
+    result   <- scriptIO (simpleHTTP request) `onFailure` UnexpectedError
+    response <- hoistEither result            `onFailure` ConnectionError
+    code     <- scriptIO (getResponseCode (Right response)) `onFailure` RetrievalError
+    body     <- scriptIO (getResponseBody (Right response)) `onFailure` RetrievalError
+    return (code,body)
+
+--
+
 type ServerAddress = URI
 
-data StorageName = StorageName String
+type StorageName = String
 
-data DatabaseName = DatabaseName String
+type DatabaseName = String
 
 data Database = Database
 
-data Transaction = Transaction
+type Transaction = EDN.TaggedValue
 
-data TransactionError = TransactionError
+data TransactionError = TransactionInteractionError InteractionError |
+                        TransactionResponseCodeError (Int,Int,Int) |
+                        StorageNameError |
+                        DatabaseNameError |
+                        UrlComponentParseError |
+                        TransactionBodyParseError String deriving Show
 
-data TransactionResult = TransactionResult
+type TransactionResult = EDN.TaggedValue
 
-transact :: ServerAddress -> StorageName -> Transaction -> IO (Either TransactionError TransactionResult)
-transact = undefined
+ednToString :: EDN.TaggedValue -> String
+ednToString = T.unpack . T.toLazyText . EDN.fromTagged
+
+transact :: ServerAddress -> StorageName -> DatabaseName -> Transaction -> IO (Either TransactionError TransactionResult)
+transact serveraddress storagename databasename transaction = runEitherT $ do
+    storageuri <- noteT StorageNameError (hoistMaybe (parseRelativeReference (storagename++"/")))
+    databaseuri <- noteT DatabaseNameError (hoistMaybe (parseRelativeReference (databasename++"/")))
+    datauri <- noteT UrlComponentParseError (hoistMaybe (parseRelativeReference "data/"))
+    let transactionstring = ednToString transaction
+        request = insertHeader HdrAccept "application/edn"
+                  (postRequestWithBody (show uri) "application/x-www-form-urlencoded"
+                  ("tx-data="++urlEncode transactionstring))
+        uri = databaseuri `relativeTo` storageuri `relativeTo` (datauri `relativeTo` serveraddress)
+    (code,body) <- webInteract request `onFailure` TransactionInteractionError
+    when (code /= (2,0,1)) (left (TransactionResponseCodeError code))
+
+    hoistEither (eitherResult (EDN.parseBSL body)) `onFailure` TransactionBodyParseError
+
 
 -- API
 
@@ -72,19 +109,17 @@ type Query = EDN.TaggedValue
 
 type QueryInput = EDN.TaggedValue
 
-data QueryError = ConnectionError ConnError |
-                  RetrievalError String |
-                  ResponseCodeError (Int,Int,Int) |
-                  BodyParseError String |
+data QueryError = QueryInteractionError InteractionError |
+                  QueryResponseCodeError (Int,Int,Int) |
+                  QueryBodyParseError String |
                   UrlParseError deriving Show
-
+    
 type QueryResult = EDN.TaggedValue
 
 q :: ServerAddress -> Query -> QueryInput -> IO (Either QueryError QueryResult)
 q serveraddress query queryinput = runEitherT $ do
 
-    let ednToString = T.unpack . T.toLazyText . EDN.fromTagged
-        querystring = ednToString query
+    let querystring = ednToString query
         inputstring = ednToString queryinput
 
     apiSlashQuery <- noteT UrlParseError (hoistMaybe (parseRelativeReference "api/query"))
@@ -94,15 +129,13 @@ q serveraddress query queryinput = runEitherT $ do
          ("offset",""),
          ("limit","")])))
 
-    let req = insertHeader HdrAccept "application/edn" (mkRequest GET uri)
+    let request = insertHeader HdrAccept "application/edn" (mkRequest GET uri)
         uri = parameters `relativeTo` apiSlashQuery `relativeTo` serveraddress
 
-    response <- lift (simpleHTTP req)
-    result   <- hoistEither response                      `onFailure` ConnectionError
-    code     <- scriptIO (getResponseCode (Right result)) `onFailure` RetrievalError
-    when (code /= (2,0,0)) (left (ResponseCodeError code))
-    body     <- scriptIO (getResponseBody (Right result)) `onFailure` RetrievalError
-    hoistEither (eitherResult (EDN.parseBSL body))        `onFailure` BodyParseError
+    (code,body) <- webInteract request `onFailure` QueryInteractionError
+    when (code /= (2,0,0)) (left (QueryResponseCodeError code))
+    
+    hoistEither (eitherResult (EDN.parseBSL body)) `onFailure` QueryBodyParseError
 
 onFailure :: Monad m => EitherT a m r -> (a -> b) -> EitherT b m r
 onFailure = flip fmapLT
@@ -113,12 +146,16 @@ testAddress :: URI
 testAddress = fromJust (parseURI "http://127.0.0.1:9834")
 
 Just testQuery = maybeResult (EDN.parseS "[:find ?e ?v :in $ :where [?e :db/doc ?v]]")
+Just testQuery2 = maybeResult (EDN.parseS "[:find ?e :in $ :where [?e :db/doc \"I'm crazy!\"]]")
 
 Just testQueryInput = maybeResult (EDN.parseS "[{:db/alias \"whatup/tst\"}]")
 
+test = q testAddress testQuery testQueryInput >>= print
+
+Just testTransaction = maybeResult (EDN.parseS "[{:db/id #db/id[:db.part/user] :db/doc \"I'm crazy!\"}]")
 
 main :: IO ()
-main = q testAddress testQuery testQueryInput >>= print
+main = transact testAddress "whatup" "tst" testTransaction >> q testAddress testQuery2 testQueryInput >>= print
 
 
 

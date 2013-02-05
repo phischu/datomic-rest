@@ -16,6 +16,8 @@ import Data.Attoparsec.Lazy
 
 import Data.ByteString.Lazy
 
+import Control.Monad
+
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Builder as T
 
@@ -71,7 +73,8 @@ type Query = EDN.TaggedValue
 type QueryInput = EDN.TaggedValue
 
 data QueryError = ConnectionError ConnError |
-                  BodyRetrievalError String |
+                  RetrievalError String |
+                  ResponseCodeError (Int,Int,Int) |
                   BodyParseError String |
                   UrlParseError deriving Show
 
@@ -82,18 +85,20 @@ q serveraddress query queryinput = runEitherT $ do
     let ednToString = T.unpack . T.toLazyText . EDN.fromTagged
         querystring = ednToString query
         inputstring = ednToString queryinput
-        req = insertHeader HdrAccept "application/edn" (mkRequest GET uri)
-        uri = parameters `relativeTo` apiSlashQuery `relativeTo` serveraddress
-        Just apiSlashQuery = parseRelativeReference "api/query"
-        Just parameters = parseRelativeReference ("?" ++ urlEncodeVars
+    apiSlashQuery <- noteT UrlParseError (hoistMaybe (parseRelativeReference "api/query"))
+    parameters <- noteT UrlParseError (hoistMaybe (parseRelativeReference ("?" ++ urlEncodeVars
          [("q",querystring),
          ("args",inputstring),
          ("offset",""),
-         ("limit","")])
+         ("limit","")])))
+    let req = insertHeader HdrAccept "application/edn" (mkRequest GET uri)
+        uri = parameters `relativeTo` apiSlashQuery `relativeTo` serveraddress
     response <- lift (simpleHTTP req)
     result <- hoistEither response `onFailure` ConnectionError
-    body <- scriptIO (getResponseBody (Right result)) `onFailure` BodyRetrievalError
-    --check response code
+    code <- scriptIO (getResponseCode (Right result)) `onFailure` RetrievalError
+    when (code /= (2,0,0)) (left (ResponseCodeError code))
+    --TODO extrace more information if response code indicates an error
+    body <- scriptIO (getResponseBody (Right result)) `onFailure` RetrievalError
     hoistEither (eitherResult (EDN.parseBSL body)) `onFailure` BodyParseError
 
 onFailure :: Monad m => EitherT a m r -> (a -> b) -> EitherT b m r

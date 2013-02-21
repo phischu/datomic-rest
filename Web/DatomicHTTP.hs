@@ -16,6 +16,8 @@ import Data.Attoparsec.Lazy
 
 import Data.ByteString.Lazy
 
+import qualified Data.ByteString.Lazy.Char8 as BC
+
 import Control.Monad
 
 import qualified Data.Text.Lazy as T
@@ -63,6 +65,12 @@ webInteract request = do
     body     <- scriptIO (getResponseBody (Right response)) `onFailure` RetrievalError
     return (code,body)
 
+ednToString :: EDN.TaggedValue -> String
+ednToString = T.unpack . T.toLazyText . EDN.fromTagged
+
+onFailure :: Monad m => EitherT a m r -> (a -> b) -> EitherT b m r
+onFailure = flip fmapLT
+
 --
 
 type ServerAddress = URI
@@ -76,7 +84,7 @@ data Database = Database
 type Transaction = EDN.TaggedValue
 
 data TransactionError = TransactionInteractionError InteractionError |
-                        TransactionResponseCodeError (Int,Int,Int) |
+                        TransactionResponseCodeError (Int,Int,Int) ByteString |
                         StorageNameError |
                         DatabaseNameError |
                         UrlComponentParseError |
@@ -84,21 +92,22 @@ data TransactionError = TransactionInteractionError InteractionError |
 
 type TransactionResult = EDN.TaggedValue
 
-ednToString :: EDN.TaggedValue -> String
-ednToString = T.unpack . T.toLazyText . EDN.fromTagged
-
 transact :: ServerAddress -> StorageName -> DatabaseName -> Transaction -> IO (Either TransactionError TransactionResult)
 transact serveraddress storagename databasename transaction = runEitherT $ do
-    storageuri <- noteT StorageNameError (hoistMaybe (parseRelativeReference (storagename++"/")))
-    databaseuri <- noteT DatabaseNameError (hoistMaybe (parseRelativeReference (databasename++"/")))
-    datauri <- noteT UrlComponentParseError (hoistMaybe (parseRelativeReference "data/"))
-    let transactionstring = ednToString transaction
-        request = insertHeader HdrAccept "application/edn"
-                  (postRequestWithBody (show uri) "application/x-www-form-urlencoded"
-                  ("tx-data="++urlEncode transactionstring))
-        uri = databaseuri `relativeTo` storageuri `relativeTo` (datauri `relativeTo` serveraddress)
+
+    datauri     <- noteT UrlComponentParseError (hoistMaybe (parseRelativeReference "data/"))
+    storageuri  <- noteT StorageNameError       (hoistMaybe (parseRelativeReference (storagename++"/")))
+    databaseuri <- noteT DatabaseNameError      (hoistMaybe (parseRelativeReference (databasename++"/")))
+
+    let request = Request uri POST [header1,header2,header3] body
+        uri     = databaseuri `relativeTo` storageuri `relativeTo` datauri `relativeTo` serveraddress
+        header1 = mkHeader HdrAccept        "application/edn"
+        header2 = mkHeader HdrContentType   "application/x-www-form-urlencoded"
+        header3 = mkHeader HdrContentLength (show (BC.length body))
+        body    = BC.pack  ("tx-data=" ++ urlEncode (ednToString transaction))
+
     (code,body) <- webInteract request `onFailure` TransactionInteractionError
-    when (code /= (2,0,1)) (left (TransactionResponseCodeError code))
+    when (code /= (2,0,1)) (left (TransactionResponseCodeError code body))
 
     hoistEither (eitherResult (EDN.parseBSL body)) `onFailure` TransactionBodyParseError
 
@@ -110,7 +119,7 @@ type Query = EDN.TaggedValue
 type QueryInput = EDN.TaggedValue
 
 data QueryError = QueryInteractionError InteractionError |
-                  QueryResponseCodeError (Int,Int,Int) |
+                  QueryResponseCodeError (Int,Int,Int) ByteString |
                   QueryBodyParseError String |
                   UrlParseError deriving Show
     
@@ -133,14 +142,12 @@ q serveraddress query queryinput = runEitherT $ do
         uri = parameters `relativeTo` apiSlashQuery `relativeTo` serveraddress
 
     (code,body) <- webInteract request `onFailure` QueryInteractionError
-    when (code /= (2,0,0)) (left (QueryResponseCodeError code))
+    when (code /= (2,0,0)) (left (QueryResponseCodeError code body))
     
-    hoistEither (eitherResult (EDN.parseBSL body)) `onFailure` QueryBodyParseError
+    hoistEither (eitherResult (EDN.parseBSL body)) `onFailure` QueryBodyParseError    
 
-onFailure :: Monad m => EitherT a m r -> (a -> b) -> EitherT b m r
-onFailure = flip fmapLT
-    
 
+-- TESTS
 
 testAddress :: URI
 testAddress = fromJust (parseURI "http://127.0.0.1:9834")
@@ -155,7 +162,7 @@ test = q testAddress testQuery testQueryInput >>= print
 Just testTransaction = maybeResult (EDN.parseS "[{:db/id #db/id[:db.part/user] :db/doc \"I'm crazy!\"}]")
 
 main :: IO ()
-main = transact testAddress "whatup" "tst" testTransaction >> q testAddress testQuery2 testQueryInput >>= print
+main = transact testAddress "whatup" "tst" testTransaction >>= print >> q testAddress testQuery2 testQueryInput >>= print
 
 
 

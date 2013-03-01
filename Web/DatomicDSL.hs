@@ -2,59 +2,154 @@ module DatomicDSL where
 
 import Control.Monad.Free
 
+import Control.Monad.Writer.Lazy
+
+import Control.Monad.State.Lazy
+
+import Data.EDN (ToEDN)
+
+import qualified Data.EDN as EDN
+
 test :: Transaction ()
 test = do
     bob_id   <- newTempId
     alice_id <- newTempId
-    multiAdd (entityTempId bob_id)   [keywordNS "person" "name"   |~> string      "Bob",
-                                      keywordNS "person" "spouse" |~> valueTempId alice_id]
-    multiAdd (entityTempId alice_id) [keywordNS "person" "name"   |~> string      "Alice",
-                                      keywordNS "person" "spouse" |~> valueTempId bob_id]
-    add (entityTempId bob_id) (keywordNS "person" "height") (floating 1.87)
+    multiAdd (entityTempId bob_id)   [attributeKeyword "person" "name"   |~> valueString "Bob",
+                                      attributeKeyword "person" "spouse" |~> valueTempId alice_id]
+    multiAdd (entityTempId alice_id) [attributeKeyword "person" "name"   |~> valueString "Alice",
+                                      attributeKeyword "person" "spouse" |~> valueTempId bob_id]
+    add      (entityTempId bob_id)   (attributeKeyword "person" "height") (valueDouble 1.87)
 
 type Transaction = Free TransactionF
 
-data TransactionF a = TransactionF
+data TransactionF a = NewTempId (TempId -> a)
+                    | Add Entity Attribute Value a
+                    | MultiAdd Entity [AttributeValue] a
+                    | Retract Entity Attribute Value a
+                    | DataFunction DataFunction a
 
-data AttributeValuePair = AttributeValuePair
+data Entity = EntityTempId TempId
+            | EntityExistingId ExistingId
+            | EntityKeyword Keyword
 
-data TempId = TempId
+data Attribute = AttributeTempId TempId
+               | AttributeExistingId ExistingId
+               | AttributeKeyword Keyword
+
+data Value = ValueTempId TempId
+           | ValueExistingId ExistingId
+           | ValueKeyword Keyword
+           | ValueString String
+           | ValueBoolean Bool
+           | ValueBigInt Integer
+           | ValueDouble Double
+           -- And More
+
+data AttributeValue = AttributeValue Attribute Value
+                    | ReverseAttributeValue Attribute Value
+
+data TempId = TempId Integer
+
+data ExistingId = ExistingId Integer
+
+data Keyword = Keyword String String
+
+data DataFunction = RetractEntity Entity
 
 instance Functor TransactionF where
-    fmap _ _ = TransactionF
+    fmap f (NewTempId c) = NewTempId (f . c)
+    fmap f (Add e a v c) = Add e a v (f c)
+    fmap f (Retract e a v c) = Retract e a v (f c)
+    fmap f (MultiAdd e avs c) = MultiAdd e avs (f c)
 
-data Attribute = Attribute
-
-data Value = Value
-
-keywordNS :: String -> String -> Attribute
-keywordNS = undefined
-
-string :: String -> Value
-string = undefined
+-- Enities
 
 entityTempId :: TempId -> Entity
-entityTempId = undefined
+entityTempId = EntityTempId
+
+entityExistingId :: ExistingId -> Entity
+entityExistingId = EntityExistingId
+
+entityKeyword :: Keyword -> Entity
+entityKeyword = EntityKeyword
+
+-- Attributes
+
+attributeTempId :: TempId -> Attribute
+attributeTempId = AttributeTempId
+
+attributeExistingId :: ExistingId -> Attribute
+attributeExistingId = AttributeExistingId
+
+attributeKeyword :: String -> String -> Attribute
+attributeKeyword namespace name = AttributeKeyword (Keyword namespace name)
+
+-- Values
 
 valueTempId :: TempId -> Value
-valueTempId = undefined
+valueTempId = ValueTempId
 
-(|~>) :: Attribute -> Value -> AttributeValuePair
-(|~>) = undefined
+valueExistingId :: ExistingId -> Value
+valueExistingId = ValueExistingId
 
-multiAdd :: Entity -> [AttributeValuePair] -> Transaction ()
-multiAdd = undefined
+valueKeyword :: Keyword -> Value
+valueKeyword = ValueKeyword
 
-add :: Entity -> Attribute -> Value -> Transaction ()
-add = undefined
+valueString :: String -> Value
+valueString = ValueString
 
-data Entity = Entity
+valueBoolean :: Bool -> Value
+valueBoolean = ValueBoolean
 
-floating :: Double -> Value
-floating = undefined
+valueBigInt :: Integer -> Value
+valueBigInt = ValueBigInt
+
+valueDouble :: Double -> Value
+valueDouble = ValueDouble
+
+-- Statements
 
 newTempId :: Transaction TempId
-newTempId = undefined
+newTempId = liftF (NewTempId (\tempid -> tempid))
+
+add :: Entity -> Attribute -> Value -> Transaction ()
+add e a v = liftF (Add e a v ())
+
+multiAdd :: Entity -> [AttributeValue] -> Transaction ()
+multiAdd e avs = liftF (MultiAdd e avs ())
+
+retract :: Entity -> Attribute -> Value -> Transaction ()
+retract e a v = liftF (Retract e a v ())
+
+retractEntity :: Entity -> Transaction ()
+retractEntity e = liftF (DataFunction (RetractEntity e) ())
+
+-- Attribute Value Pairs
+
+(|~>) :: Attribute -> Value -> AttributeValue
+(|~>) = undefined
+
+-- Interpretation
+
+instance ToEDN Entity where
+
+instance ToEDN Attribute where
+
+instance ToEDN Value where
+
+dbadd :: EDN.TaggedValue
+dbadd = undefined
+
+decrement :: TempId -> TempId
+decrement (TempId x) = TempId (x - 1)
+
+interpretTransaction :: Transaction a -> WriterT [EDN.TaggedValue] (State TempId) ()
+interpretTransaction (Pure _) = return ()
+interpretTransaction (Free (NewTempId c)) = lift (modify decrement >> get) >>= interpretTransaction . c
+interpretTransaction (Free (Add e a v c)) = tell [EDN.notag (EDN.makeList [dbadd,EDN.toEDN e,EDN.toEDN a,EDN.toEDN v])] >> interpretTransaction c
+interpretTransaction (Free (MultiAdd e avs c)) = undefined
+interpretTransaction (Free (Retract e a v c)) = undefined
+interpretTransaction (Free (DataFunction (RetractEntity e) c)) = undefined
 
 {-
 

@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module DatomicDSL where
 
 import Control.Monad.Free
@@ -12,7 +13,9 @@ import qualified Data.EDN as EDN
 
 import Data.Word
 
-import qualified Data.ByteString.Char8 as BS
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 
 test :: Transaction ()
 test = do
@@ -26,7 +29,7 @@ test = do
 
 type Transaction = Free TransactionF
 
-data TransactionF a = NewTempId String (TempId -> a)
+data TransactionF a = NewTempId Text (TempId -> a)
                     | Add Entity Attribute Value a
                     | MultiAdd Entity [AttributeValue] a
                     | Retract Entity Attribute Value a
@@ -43,7 +46,7 @@ data Attribute = AttributeTempId TempId
 data Value = ValueTempId TempId
            | ValueExistingId ExistingId
            | ValueKeyword Keyword
-           | ValueString String
+           | ValueString Text
            | ValueBoolean Bool
            | ValueLong Integer
            | ValueBigInt Integer
@@ -52,17 +55,17 @@ data Value = ValueTempId TempId
            | ValueBigDec Rational
            | ValueInstant Integer
            | ValueUUID Integer
-           | ValueURI String
+           | ValueURI Text
            | ValueBytes [Word8]
 
 data AttributeValue = AttributeValue Attribute Value
                     | ReverseAttributeValue Attribute Value
 
-data TempId = TempId String Integer
+data TempId = TempId Text Integer
 
 data ExistingId = ExistingId Integer
 
-data Keyword = Keyword String String
+data Keyword = Keyword Text Text
 
 data DataFunction = RetractEntity Entity
 
@@ -91,7 +94,7 @@ attributeTempId = AttributeTempId
 attributeExistingId :: ExistingId -> Attribute
 attributeExistingId = AttributeExistingId
 
-attributeKeyword :: String -> String -> Attribute
+attributeKeyword :: Text -> Text -> Attribute
 attributeKeyword namespace name = AttributeKeyword (Keyword namespace name)
 
 -- Values
@@ -105,7 +108,7 @@ valueExistingId = ValueExistingId
 valueKeyword :: Keyword -> Value
 valueKeyword = ValueKeyword
 
-valueString :: String -> Value
+valueString :: Text -> Value
 valueString = ValueString
 
 valueBoolean :: Bool -> Value
@@ -119,7 +122,7 @@ valueDouble = ValueDouble
 
 -- Statements
 
-newTempId :: String -> Transaction TempId
+newTempId :: Text -> Transaction TempId
 newTempId part = liftF (NewTempId part (\tempid -> tempid))
 
 add :: Entity -> Attribute -> Value -> Transaction ()
@@ -137,7 +140,7 @@ retractEntity e = liftF (DataFunction (RetractEntity e) ())
 -- Attribute Value Pairs
 
 (|~>) :: Attribute -> Value -> AttributeValue
-(|~>) = undefined
+(|~>) = AttributeValue
 
 -- Interpretation
 
@@ -155,7 +158,7 @@ instance ToEDN Value where
     toEDN (ValueTempId tempid) = EDN.toEDN tempid
     toEDN (ValueExistingId existingid) = EDN.toEDN existingid
     toEDN (ValueKeyword keyword) = EDN.toEDN keyword
-    toEDN (ValueString string) = EDN.toEDN string
+    toEDN (ValueString text) = EDN.toEDN text
     toEDN (ValueBoolean bool) = EDN.toEDN bool
     toEDN (ValueLong long) = EDN.toEDN long -- Should be Int64 or sth.
     toEDN (ValueBigInt integer) = EDN.toEDN integer
@@ -164,28 +167,31 @@ instance ToEDN Value where
     toEDN _ = error "Instance ToEDN Attribute not yet complete"
 
 instance ToEDN TempId where
-    toEDN (TempId part integer) = EDN.tag (BS.pack "db") (BS.pack "id") (EDN.makeList [EDN.keyword (BS.pack (":db.part/"++part)),EDN.toEDN integer])
-
--------- NEEEED UTF-8 SUPPORT
+    toEDN (TempId part integer) = EDN.tag (T.encodeUtf8 "db") (T.encodeUtf8 "id") (EDN.makeList [EDN.keyword (T.encodeUtf8 (":db.part/" `T.append` part)),EDN.toEDN integer])
 
 instance ToEDN ExistingId where
+    toEDN (ExistingId integer) = EDN.toEDN integer
 
 instance ToEDN Keyword where
+    toEDN (Keyword _ "") = error "Empty name in keyword"
+    toEDN (Keyword "" name) = EDN.keyword (T.encodeUtf8 name)
+    toEDN (Keyword prefix name) = EDN.keyword (T.encodeUtf8 (prefix `T.append` "/" `T.append` name))
 
 dbadd :: EDN.TaggedValue
-dbadd = undefined
+dbadd = EDN.keyword (T.encodeUtf8 ("db/add"))
 
 dbid :: EDN.Value
-dbid = undefined
+dbid = EDN.stripTag (EDN.keyword (T.encodeUtf8 ("db/id")))
 
 attributeValueToEDNPair :: AttributeValue -> EDN.Pair
-attributeValueToEDNPair = undefined
+attributeValueToEDNPair (AttributeValue attribute value) = (EDN.stripTag (EDN.toEDN attribute),EDN.toEDN value)
+attributeValueToEDNPair (ReverseAttributeValue (AttributeKeyword (Keyword prefix name)) value) = (EDN.stripTag (EDN.toEDN (attributeKeyword prefix ("_" `T.append` name))),EDN.toEDN value)
 
 dbretract :: EDN.TaggedValue
-dbretract = undefined
+dbretract = EDN.keyword (T.encodeUtf8 ("db/retract"))
 
 dbfnretractentity :: EDN.TaggedValue
-dbfnretractentity = undefined
+dbfnretractentity = EDN.keyword (T.encodeUtf8 ("db.fn/retractEntity"))
 
 decrement :: Integer -> Integer
 decrement x = x - 1
@@ -201,42 +207,3 @@ interpretTransaction (Free (DataFunction (RetractEntity e) c)) = tell [EDN.toEDN
 literalRepresentation :: Transaction a -> EDN.TaggedValue
 literalRepresentation = EDN.toEDN . flip evalState 0 . execWriterT . interpretTransaction
 
-{-
-
-data TransactionF a = NewTempID (TempID -> a)
-                    | Add EAV a
-                    | Retract EAV a
-
-type TempID = Int
-
-data EAV = EAV EntityId Attribute Value
-
-data Transaction = Transaction [TransactionStatement]
-
-data TransactionStatement = Addition EntityId Attribute Value
-                          | Retraction EntityId Attribute Value
-                          | DataFunction DataFunction
-                          | MultiAddition EntityId [AttributeValuePair]
-
-data AttributeValuePair = AttributeValuePair Attribute Value
-                        | BackwardAttributeValuePair Attribute Value
-
-data DataFunction = RetractEntity EntityId
-
-data EntityId = Temporary Partition
-              | TemporaryId Partition NegativeInt
-              | Existing PositiveInt
-              | Identifier Identifier
-
-data Attribute = Attribute
-
-data Value = Value
-
-data PositiveInt = PositiveInt Int
-
-data NegativeInt = NegativeInt Int
-
-data Partition = Partition
-
-data Identifier = Ident
--}

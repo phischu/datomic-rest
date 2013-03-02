@@ -17,15 +17,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 
-test :: Transaction ()
-test = do
-    bob_id   <- newTempId "user"
-    alice_id <- newTempId "user"
-    multiAdd (entityTempId bob_id)   [attributeKeyword "person" "name"   |~> valueString "Bob",
-                                      attributeKeyword "person" "spouse" |~> valueTempId alice_id]
-    multiAdd (entityTempId alice_id) [attributeKeyword "person" "name"   |~> valueString "Alice",
-                                      attributeKeyword "person" "spouse" |~> valueTempId bob_id]
-    add      (entityTempId bob_id)   (attributeKeyword "person" "height") (valueDouble 1.87)
 
 type Transaction = Free TransactionF
 
@@ -167,7 +158,7 @@ instance ToEDN Value where
     toEDN _ = error "Instance ToEDN Attribute not yet complete"
 
 instance ToEDN TempId where
-    toEDN (TempId part integer) = EDN.tag (T.encodeUtf8 "db") (T.encodeUtf8 "id") (EDN.makeList [EDN.keyword (T.encodeUtf8 (":db.part/" `T.append` part)),EDN.toEDN integer])
+    toEDN (TempId part integer) = EDN.tag (T.encodeUtf8 "db") (T.encodeUtf8 "id") (EDN.makeVec [EDN.keyword (T.encodeUtf8 ("db.part/" `T.append` part)),EDN.toEDN integer])
 
 instance ToEDN ExistingId where
     toEDN (ExistingId integer) = EDN.toEDN integer
@@ -199,11 +190,11 @@ decrement x = x - 1
 interpretTransaction :: Transaction a -> WriterT [EDN.TaggedValue] (State Integer) ()
 interpretTransaction (Pure _) = return ()
 interpretTransaction (Free (NewTempId part c)) = lift (modify decrement >> get) >>= interpretTransaction . c . TempId part
-interpretTransaction (Free (Add e a v c)) = tell [EDN.toEDN [dbadd,EDN.toEDN e,EDN.toEDN a,EDN.toEDN v]] >> interpretTransaction c
+interpretTransaction (Free (Add e a v c)) = tell [EDN.notag (EDN.makeVec [dbadd,EDN.toEDN e,EDN.toEDN a,EDN.toEDN v])] >> interpretTransaction c
 interpretTransaction (Free (MultiAdd e avs c)) = tell [EDN.toEDN (EDN.makeMap ((dbid,EDN.toEDN e):map attributeValueToEDNPair avs))] >> interpretTransaction c
-interpretTransaction (Free (Retract e a v c)) = tell [EDN.toEDN [dbretract,EDN.toEDN e,EDN.toEDN a,EDN.toEDN v]] >> interpretTransaction c
-interpretTransaction (Free (DataFunction (RetractEntity e) c)) = tell [EDN.toEDN [dbfnretractentity,EDN.toEDN e]] >> interpretTransaction c
+interpretTransaction (Free (Retract e a v c)) = tell [EDN.notag (EDN.makeVec [dbretract,EDN.toEDN e,EDN.toEDN a,EDN.toEDN v])] >> interpretTransaction c
+interpretTransaction (Free (DataFunction (RetractEntity e) c)) = tell [EDN.notag (EDN.makeVec [dbfnretractentity,EDN.toEDN e])] >> interpretTransaction c
 
 literalRepresentation :: Transaction a -> EDN.TaggedValue
-literalRepresentation = EDN.toEDN . flip evalState 0 . execWriterT . interpretTransaction
+literalRepresentation = EDN.notag . EDN.makeVec . flip evalState 0 . execWriterT . interpretTransaction
 

@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module DatomicHTTP where
 
 import Network.URI
@@ -24,6 +25,8 @@ import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Builder as T
 
 import qualified Data.EDN.Encode as EDN
+
+import DatomicDSL
 
 -- DATA
 
@@ -81,8 +84,6 @@ type DatabaseName = String
 
 data Database = Database
 
-type Transaction = EDN.TaggedValue
-
 data TransactionError = TransactionInteractionError InteractionError |
                         TransactionResponseCodeError (Int,Int,Int) ByteString |
                         StorageNameError |
@@ -92,7 +93,7 @@ data TransactionError = TransactionInteractionError InteractionError |
 
 type TransactionResult = EDN.TaggedValue
 
-transact :: ServerAddress -> StorageName -> DatabaseName -> Transaction -> IO (Either TransactionError TransactionResult)
+transact :: ServerAddress -> StorageName -> DatabaseName -> EDN.TaggedValue -> IO (Either TransactionError TransactionResult)
 transact serveraddress storagename databasename transaction = runEitherT $ do
 
     datauri     <- noteT UrlComponentParseError (hoistMaybe (parseRelativeReference "data/"))
@@ -161,8 +162,21 @@ test = q testAddress testQuery testQueryInput >>= print
 
 Just testTransaction = maybeResult (EDN.parseS "[{:db/id #db/id[:db.part/user] :db/doc \"I'm crazy!\"}]")
 
+testTransaction2 = literalRepresentation $ do
+    bob_id   <- newTempId "user"
+    alice_id <- newTempId "user"
+    multiAdd (entityTempId bob_id)   [attributeKeyword "person" "name"   |~> valueString "Bob",
+                                      attributeKeyword "person" "spouse" |~> valueTempId alice_id]
+    multiAdd (entityTempId alice_id) [attributeKeyword "person" "name"   |~> valueString "Alice",
+                                      attributeKeyword "person" "spouse" |~> valueTempId bob_id]
+    add      (entityTempId bob_id)   (attributeKeyword "person" "height") (valueDouble 1.87)
+
+testTransaction3 = literalRepresentation $ do
+    tempid <- newTempId "user"
+    multiAdd (entityTempId tempid) [attributeKeyword "db" "doc" |~> valueString "I'm crazy!"]
+
 main :: IO ()
-main = transact testAddress "whatup" "tst" testTransaction >>= print >> q testAddress testQuery2 testQueryInput >>= print
+main = transact testAddress "whatup" "tst" testTransaction2 >>= print >> q testAddress testQuery2 testQueryInput >>= print
 
 
 

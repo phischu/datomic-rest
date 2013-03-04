@@ -32,8 +32,33 @@ import DatomicDSL
 
 -- STORAGE
 
-createDatabase :: Connection -> DatabaseName -> IO Bool
-createDatabase = undefined
+data CreationError = CreationInteractionError InteractionError
+                   | CreationResponseCodeError (Int,Int,Int) ByteString
+                   | CreationUrlError UrlError deriving Show
+
+data UrlError = StorageNameError |
+                DatabaseNameError |
+                UrlComponentParseError deriving Show
+
+createDatabase :: ServerAddress -> StorageName -> DatabaseName -> IO (Either CreationError Bool)
+createDatabase serveraddress storagename databasename = runEitherT $ do
+
+    datauri     <- noteT (CreationUrlError UrlComponentParseError) (hoistMaybe (parseRelativeReference "data/"))
+    storageuri  <- noteT (CreationUrlError StorageNameError)       (hoistMaybe (parseRelativeReference (storagename++"/")))
+    databaseuri <- noteT (CreationUrlError DatabaseNameError)      (hoistMaybe (parseRelativeReference (databasename++"/")))
+
+    let request = Request uri POST [header1,header2,header3] body
+        uri     = storageuri `relativeTo` datauri `relativeTo` serveraddress
+        header1 = mkHeader HdrAccept        "application/edn"
+        header2 = mkHeader HdrContentType   "application/x-www-form-urlencoded"
+        header3 = mkHeader HdrContentLength (show (BC.length body))
+        body    = BC.pack  ("db-name=" ++ urlEncode databasename)
+
+    (code,body) <- webInteract request `onFailure` CreationInteractionError
+    case code of
+        (2,0,1) -> return True
+        (2,0,0) -> return False
+        _       -> left (CreationResponseCodeError code body)
 
 -- DATABASE
 
@@ -86,9 +111,7 @@ data Database = Database
 
 data TransactionError = TransactionInteractionError InteractionError |
                         TransactionResponseCodeError (Int,Int,Int) ByteString |
-                        StorageNameError |
-                        DatabaseNameError |
-                        UrlComponentParseError |
+                        TransactionUrlError UrlError |
                         TransactionBodyParseError String deriving Show
 
 type TransactionResult = EDN.TaggedValue
@@ -96,9 +119,9 @@ type TransactionResult = EDN.TaggedValue
 transact :: ServerAddress -> StorageName -> DatabaseName -> EDN.TaggedValue -> IO (Either TransactionError TransactionResult)
 transact serveraddress storagename databasename transaction = runEitherT $ do
 
-    datauri     <- noteT UrlComponentParseError (hoistMaybe (parseRelativeReference "data/"))
-    storageuri  <- noteT StorageNameError       (hoistMaybe (parseRelativeReference (storagename++"/")))
-    databaseuri <- noteT DatabaseNameError      (hoistMaybe (parseRelativeReference (databasename++"/")))
+    datauri     <- noteT (TransactionUrlError UrlComponentParseError) (hoistMaybe (parseRelativeReference "data/"))
+    storageuri  <- noteT (TransactionUrlError StorageNameError)       (hoistMaybe (parseRelativeReference (storagename++"/")))
+    databaseuri <- noteT (TransactionUrlError DatabaseNameError)      (hoistMaybe (parseRelativeReference (databasename++"/")))
 
     let request = Request uri POST [header1,header2,header3] body
         uri     = databaseuri `relativeTo` storageuri `relativeTo` datauri `relativeTo` serveraddress

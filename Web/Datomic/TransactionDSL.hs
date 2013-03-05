@@ -1,21 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Web.Datomic.TransactionDSL where
 
-import Control.Monad.Free
-
-import Control.Monad.Writer.Lazy
-
-import Control.Monad.State.Lazy
+import Control.Monad.Free (Free(Pure,Free),liftF)
+import Control.Monad.Writer.Lazy (execWriterT,WriterT,tell)
+import Control.Monad.State.Lazy (evalState,State,modify,get,lift)
 
 import Data.EDN (ToEDN)
+import qualified Data.EDN as EDN (TaggedValue,Value,ToEDN(toEDN),tag,notag,stripTag,keyword,makeVec,makeMap,Pair)
 
-import qualified Data.EDN as EDN
-
-import Data.Word
+import Data.Word (Word8)
 
 import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
+import qualified Data.Text as T ()
+import Data.Monoid ((<>))
+import qualified Data.Text.Encoding as T (encodeUtf8)
 
 
 type Transaction = Free TransactionF
@@ -158,7 +156,7 @@ instance ToEDN Value where
     toEDN _ = error "Instance ToEDN Attribute not yet complete"
 
 instance ToEDN TempId where
-    toEDN (TempId part integer) = EDN.tag (T.encodeUtf8 "db") (T.encodeUtf8 "id") (EDN.makeVec [EDN.keyword (T.encodeUtf8 ("db.part/" `T.append` part)),EDN.toEDN integer])
+    toEDN (TempId part integer) = EDN.tag (T.encodeUtf8 "db") (T.encodeUtf8 "id") (EDN.makeVec [EDN.keyword (T.encodeUtf8 ("db.part/" <> part)),EDN.toEDN integer])
 
 instance ToEDN ExistingId where
     toEDN (ExistingId integer) = EDN.toEDN integer
@@ -166,7 +164,7 @@ instance ToEDN ExistingId where
 instance ToEDN Keyword where
     toEDN (Keyword _ "") = error "Empty name in keyword"
     toEDN (Keyword "" name) = EDN.keyword (T.encodeUtf8 name)
-    toEDN (Keyword prefix name) = EDN.keyword (T.encodeUtf8 (prefix `T.append` "/" `T.append` name))
+    toEDN (Keyword prefix name) = EDN.keyword (T.encodeUtf8 (prefix <> "/" <> name))
 
 dbadd :: EDN.TaggedValue
 dbadd = EDN.keyword (T.encodeUtf8 ("db/add"))
@@ -176,7 +174,7 @@ dbid = EDN.stripTag (EDN.keyword (T.encodeUtf8 ("db/id")))
 
 attributeValueToEDNPair :: AttributeValue -> EDN.Pair
 attributeValueToEDNPair (AttributeValue attribute value) = (EDN.stripTag (EDN.toEDN attribute),EDN.toEDN value)
-attributeValueToEDNPair (ReverseAttributeValue (AttributeKeyword (Keyword prefix name)) value) = (EDN.stripTag (EDN.toEDN (attributeKeyword prefix ("_" `T.append` name))),EDN.toEDN value)
+attributeValueToEDNPair (ReverseAttributeValue (AttributeKeyword (Keyword prefix name)) value) = (EDN.stripTag (EDN.toEDN (attributeKeyword prefix ("_" <> name))),EDN.toEDN value)
 
 dbretract :: EDN.TaggedValue
 dbretract = EDN.keyword (T.encodeUtf8 ("db/retract"))

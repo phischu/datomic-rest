@@ -1,5 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Web.Datomic.REST (createDatabase,transact,q) where
+module Web.Datomic.REST
+    (ServerAddress,StorageName,DatabaseName,
+     createDatabase,CreationError(..),
+     transact,TransactionResult,TransactionError(..),
+     q,Query,QueryInput,QueryResult,QueryError,
+     InteractionError(..),UrlError(..)) where
 
 import Network.URI (URI,parseRelativeReference,relativeTo)
 
@@ -27,10 +32,18 @@ import qualified Data.Text.Lazy.Builder as T (toLazyText)
 
 -- STORAGE
 
+type ServerAddress = URI
+
+type StorageName = String
+
+type DatabaseName = String
+
 data CreationError = CreationInteractionError InteractionError
                    | CreationResponseCodeError (Int,Int,Int) ByteString
                    | CreationUrlError UrlError deriving Show
 
+-- | Creates a Database with the given name on the given storage via the given server.
+--   Returns `True` if the database was created and `False` if it existed.
 createDatabase :: ServerAddress -> StorageName -> DatabaseName -> IO (Either CreationError Bool)
 createDatabase serveraddress storagename databasename = runEitherT $ do
 
@@ -64,13 +77,7 @@ createDatabase serveraddress storagename databasename = runEitherT $ do
 --entity :: Database -> EntityID -> EntityMap
 --entity = undefined
 
---wtf events ::
-
-type ServerAddress = URI
-
-type StorageName = String
-
-type DatabaseName = String
+--events :: ???
 
 data TransactionError = TransactionInteractionError InteractionError |
                         TransactionResponseCodeError (Int,Int,Int) ByteString |
@@ -79,6 +86,7 @@ data TransactionError = TransactionInteractionError InteractionError |
 
 type TransactionResult = EDN.TaggedValue
 
+-- | Commit the given transaction to the given database on the given storage via the given server.
 transact :: ServerAddress -> StorageName -> DatabaseName -> EDN.TaggedValue -> IO (Either TransactionError TransactionResult)
 transact serveraddress storagename databasename transaction = runEitherT $ do
 
@@ -112,6 +120,7 @@ data QueryError = QueryInteractionError InteractionError |
     
 type QueryResult = EDN.TaggedValue
 
+-- | Queries the given server using the given queryinput and the given query.
 q :: ServerAddress -> Query -> QueryInput -> IO (Either QueryError QueryResult)
 q serveraddress query queryinput = runEitherT $ do
 

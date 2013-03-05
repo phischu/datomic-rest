@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, FlexibleInstances #-}
 module Web.Datomic.TransactionDSL where
 
 import Control.Monad.Free (Free(Pure,Free),liftF)
@@ -58,6 +58,21 @@ data Keyword = Keyword Text Text
 
 data DataFunction = RetractEntity Entity
 
+tid :: TempId -> TempId
+tid = id
+
+eid :: ExistingId -> ExistingId
+eid = id
+
+key :: Text -> Text -> Keyword
+key = Keyword
+
+str :: Text -> Text
+str = id
+
+dbl :: Double -> Double
+dbl = id
+
 instance Functor TransactionF where
     fmap f (NewTempId p c) = NewTempId p (f . c)
     fmap f (Add e a v c) = Add e a v (f c)
@@ -65,6 +80,21 @@ instance Functor TransactionF where
     fmap f (MultiAdd e avs c) = MultiAdd e avs (f c)
 
 -- Enities
+
+class Ent a where
+    ent :: a -> Entity
+
+instance Ent TempId where
+    ent = EntityTempId
+
+instance Ent ExistingId where
+    ent = EntityExistingId
+
+instance Ent Keyword where
+    ent = EntityKeyword
+
+instance Ent Entity where
+    ent = id
 
 entityTempId :: TempId -> Entity
 entityTempId = EntityTempId
@@ -77,6 +107,21 @@ entityKeyword = EntityKeyword
 
 -- Attributes
 
+class Att a where
+    att :: a -> Attribute
+
+instance Att TempId where
+    att = AttributeTempId
+
+instance Att ExistingId where
+    att = AttributeExistingId
+
+instance Att Keyword where
+    att = AttributeKeyword
+
+instance Att Attribute where
+    att = id
+
 attributeTempId :: TempId -> Attribute
 attributeTempId = AttributeTempId
 
@@ -87,6 +132,33 @@ attributeKeyword :: Text -> Text -> Attribute
 attributeKeyword namespace name = AttributeKeyword (Keyword namespace name)
 
 -- Values
+
+class Val a where
+    val :: a -> Value
+
+instance Val TempId where
+    val = ValueTempId
+
+instance Val ExistingId where
+    val = ValueExistingId
+
+instance Val Keyword where
+    val = ValueKeyword
+
+instance Val Text where
+    val = ValueString
+
+instance Val Bool where
+    val = ValueBoolean
+
+instance Val Integer where
+    val = ValueBigInt
+
+instance Val Double where
+    val = ValueDouble
+
+instance Val Value where
+    val = id
 
 valueTempId :: TempId -> Value
 valueTempId = ValueTempId
@@ -114,22 +186,30 @@ valueDouble = ValueDouble
 newTempId :: Text -> Transaction TempId
 newTempId part = liftF (NewTempId part (\tempid -> tempid))
 
-add :: Entity -> Attribute -> Value -> Transaction ()
-add e a v = liftF (Add e a v ())
+add :: (Ent e,Att a,Val v) => e -> a -> v -> Transaction ()
+add e a v = liftF (Add (ent e) (att a) (val v) ())
 
-multiAdd :: Entity -> [AttributeValue] -> Transaction ()
-multiAdd e avs = liftF (MultiAdd e avs ())
+multiAdd :: (Ent e) => e -> [AttributeValue] -> Transaction ()
+multiAdd e avs = liftF (MultiAdd (ent e) avs ())
 
-retract :: Entity -> Attribute -> Value -> Transaction ()
-retract e a v = liftF (Retract e a v ())
+retract :: (Ent e,Att a,Val v) => e -> a -> v -> Transaction ()
+retract e a v = liftF (Retract (ent e) (att a) (val v) ())
 
-retractEntity :: Entity -> Transaction ()
-retractEntity e = liftF (DataFunction (RetractEntity e) ())
+retractEntity :: (Ent e) => e -> Transaction ()
+retractEntity e = liftF (DataFunction (RetractEntity (ent e)) ())
 
 -- Attribute Value Pairs
 
-(|~>) :: Attribute -> Value -> AttributeValue
-(|~>) = AttributeValue
+(|~>) :: (Att a,Val v) => a -> v -> AttributeValue
+a |~> v = AttributeValue (att a) (val v)
+
+(|<~) :: (Att a,Val v) => a -> v -> AttributeValue
+a |<~ v = ReverseAttributeValue (att a) (val v)
+
+-- Interface
+
+instance ToEDN (Free TransactionF a) where
+    toEDN = literalRepresentation
 
 -- Interpretation
 

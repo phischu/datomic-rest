@@ -15,7 +15,7 @@ cabal-version:       >=1.10
 library
   exposed-modules:     Web.Datomic.REST,
                        Web.Datomic.TransactionDSL
-  -- other-modules:       
+  other-modules:       Web.Datomic.Test
   build-depends:       base,
                        hedn,
                        free,

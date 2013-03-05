@@ -1,5 +1,10 @@
 {-# LANGUAGE OverloadedStrings, FlexibleInstances #-}
-module Web.Datomic.TransactionDSL where
+module Web.Datomic.TransactionDSL (
+    Transaction,
+    newTempId,add,multiAdd,retract,retractEntity,
+    tid,eid,key,str,dbl,
+    (|~>),(|<~),
+    literalRepresentation) where
 
 import Control.Monad.Free (Free(Pure,Free),liftF)
 import Control.Monad.Writer.Lazy (execWriterT,WriterT,tell)
@@ -252,26 +257,37 @@ dbadd = EDN.keyword (T.encodeUtf8 ("db/add"))
 dbid :: EDN.Value
 dbid = EDN.stripTag (EDN.keyword (T.encodeUtf8 ("db/id")))
 
-attributeValueToEDNPair :: AttributeValue -> EDN.Pair
-attributeValueToEDNPair (AttributeValue attribute value) = (EDN.stripTag (EDN.toEDN attribute),EDN.toEDN value)
-attributeValueToEDNPair (ReverseAttributeValue (AttributeKeyword (Keyword prefix name)) value) = (EDN.stripTag (EDN.toEDN (attributeKeyword prefix ("_" <> name))),EDN.toEDN value)
-
 dbretract :: EDN.TaggedValue
 dbretract = EDN.keyword (T.encodeUtf8 ("db/retract"))
 
 dbfnretractentity :: EDN.TaggedValue
 dbfnretractentity = EDN.keyword (T.encodeUtf8 ("db.fn/retractEntity"))
 
+attributeValueToEDNPair :: AttributeValue -> EDN.Pair
+attributeValueToEDNPair (AttributeValue attribute value) = (EDN.stripTag (EDN.toEDN attribute),EDN.toEDN value)
+attributeValueToEDNPair (ReverseAttributeValue (AttributeKeyword (Keyword prefix name)) value) = (EDN.stripTag (EDN.toEDN (attributeKeyword prefix ("_" <> name))),EDN.toEDN value)
+
 decrement :: Integer -> Integer
 decrement x = x - 1
 
 interpretTransaction :: Transaction a -> WriterT [EDN.TaggedValue] (State Integer) ()
-interpretTransaction (Pure _) = return ()
-interpretTransaction (Free (NewTempId part c)) = lift (modify decrement >> get) >>= interpretTransaction . c . TempId part
-interpretTransaction (Free (Add e a v c)) = tell [EDN.notag (EDN.makeVec [dbadd,EDN.toEDN e,EDN.toEDN a,EDN.toEDN v])] >> interpretTransaction c
-interpretTransaction (Free (MultiAdd e avs c)) = tell [EDN.toEDN (EDN.makeMap ((dbid,EDN.toEDN e):map attributeValueToEDNPair avs))] >> interpretTransaction c
-interpretTransaction (Free (Retract e a v c)) = tell [EDN.notag (EDN.makeVec [dbretract,EDN.toEDN e,EDN.toEDN a,EDN.toEDN v])] >> interpretTransaction c
-interpretTransaction (Free (DataFunction (RetractEntity e) c)) = tell [EDN.notag (EDN.makeVec [dbfnretractentity,EDN.toEDN e])] >> interpretTransaction c
+interpretTransaction (Pure _) = do
+    return ()
+interpretTransaction (Free (NewTempId part c)) = do
+    tempid <- lift (modify decrement >> get)
+    interpretTransaction (c (TempId part tempid))
+interpretTransaction (Free (Add e a v c)) = do
+    tell [EDN.notag (EDN.makeVec [dbadd,EDN.toEDN e,EDN.toEDN a,EDN.toEDN v])]
+    interpretTransaction c
+interpretTransaction (Free (MultiAdd e avs c)) = do
+    tell [EDN.notag (EDN.makeMap ((dbid,EDN.toEDN e):map attributeValueToEDNPair avs))]
+    interpretTransaction c
+interpretTransaction (Free (Retract e a v c)) = do
+    tell [EDN.notag (EDN.makeVec [dbretract,EDN.toEDN e,EDN.toEDN a,EDN.toEDN v])]
+    interpretTransaction c
+interpretTransaction (Free (DataFunction (RetractEntity e) c)) = do
+    tell [EDN.notag (EDN.makeVec [dbfnretractentity,EDN.toEDN e])]
+    interpretTransaction c
 
 literalRepresentation :: Transaction a -> EDN.TaggedValue
 literalRepresentation = EDN.notag . EDN.makeVec . flip evalState 0 . execWriterT . interpretTransaction

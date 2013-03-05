@@ -4,7 +4,11 @@ module Web.Datomic.TransactionDSL (
     newTempId,add,multiAdd,retract,retractEntity,
     tid,eid,key,str,dbl,
     (|~>),(|<~),
-    literalRepresentation) where
+    literalRepresentation,
+    TransactionF,
+    Entity(..),Attribute(..),Value(..),AttributeValue(..),
+    Ent(ent),Att(att),Val(val),
+    TempId,ExistingId(ExistingId),Keyword(Keyword)) where
 
 import Control.Monad.Free (Free(Pure,Free),liftF)
 import Control.Monad.Writer.Lazy (execWriterT,WriterT,tell)
@@ -21,8 +25,10 @@ import Data.Monoid ((<>))
 import qualified Data.Text.Encoding as T (encodeUtf8)
 
 
-type Transaction = Free TransactionF
+-- | The free monad of Transactions.
+type Transaction a = Free TransactionF a
 
+-- | The Transaction Functor from which the free monad is built.
 data TransactionF a = NewTempId Text (TempId -> a)
                     | Add Entity Attribute Value a
                     | MultiAdd Entity [AttributeValue] a
@@ -63,18 +69,23 @@ data Keyword = Keyword Text Text
 
 data DataFunction = RetractEntity Entity
 
+-- | Fix a value to have type TempId.
 tid :: TempId -> TempId
 tid = id
 
+-- | Fix a value to have type ExistingId.
 eid :: ExistingId -> ExistingId
 eid = id
 
+-- | Create a Keyword.
 key :: Text -> Text -> Keyword
 key = Keyword
 
+-- | Fix a value to have type Text.
 str :: Text -> Text
 str = id
 
+-- | Fix a value to have type Double.
 dbl :: Double -> Double
 dbl = id
 
@@ -188,28 +199,41 @@ valueDouble = ValueDouble
 
 -- Statements
 
+-- | Create a new TempId. The argument is the part in which to create it but without 
+--   \":db.part\/\". Example: newTempId \"user\".
 newTempId :: Text -> Transaction TempId
 newTempId part = liftF (NewTempId part (\tempid -> tempid))
 
+-- | Add a triple to the database.
 add :: (Ent e,Att a,Val v) => e -> a -> v -> Transaction ()
 add e a v = liftF (Add (ent e) (att a) (val v) ())
 
+-- | Add multiple attribute-value-pairs to the same entity.
 multiAdd :: (Ent e) => e -> [AttributeValue] -> Transaction ()
 multiAdd e avs = liftF (MultiAdd (ent e) avs ())
 
+-- | Retract a triple.
 retract :: (Ent e,Att a,Val v) => e -> a -> v -> Transaction ()
 retract e a v = liftF (Retract (ent e) (att a) (val v) ())
 
+-- | Retract an entity, also retracting all attributes referencing it and
+--   all of its components.
 retractEntity :: (Ent e) => e -> Transaction ()
 retractEntity e = liftF (DataFunction (RetractEntity (ent e)) ())
 
 -- Attribute Value Pairs
 
+-- | A simple attribute-value-pair.
 (|~>) :: (Att a,Val v) => a -> v -> AttributeValue
 a |~> v = AttributeValue (att a) (val v)
 
-(|<~) :: (Att a,Val v) => a -> v -> AttributeValue
-a |<~ v = ReverseAttributeValue (att a) (val v)
+-- | A reverse attribute-value-pair.
+(|<~) :: (Att a,Ent e) => a -> e -> AttributeValue
+a |<~ e = case ent e of
+    (EntityTempId tempid)         -> ReverseAttributeValue (att a) (ValueTempId tempid)
+    (EntityExistingId existingid) -> ReverseAttributeValue (att a) (ValueExistingId existingid)
+    (EntityKeyword keyword)       -> ReverseAttributeValue (att a) (ValueKeyword keyword)
+
 
 -- Interface
 
@@ -289,6 +313,8 @@ interpretTransaction (Free (DataFunction (RetractEntity e) c)) = do
     tell [EDN.notag (EDN.makeVec [dbfnretractentity,EDN.toEDN e])]
     interpretTransaction c
 
+-- | Interpret a Transaction into its EDN represetation. Also available through
+--   the `ToEDN` instance for Transaction.
 literalRepresentation :: Transaction a -> EDN.TaggedValue
 literalRepresentation = EDN.notag . EDN.makeVec . flip evalState 0 . execWriterT . interpretTransaction
 

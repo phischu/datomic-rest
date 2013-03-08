@@ -29,7 +29,7 @@ import qualified Data.Text.Encoding as T (encodeUtf8)
 type Transaction a = Free TransactionF a
 
 -- | The Transaction Functor from which the free monad is built.
-data TransactionF a = NewTempId Text (TempId -> a)
+data TransactionF a = NewTempId Keyword (TempId -> a)
                     | Add Entity Attribute Value a
                     | MultiAdd Entity [AttributeValue] a
                     | Retract Entity Attribute Value a
@@ -61,7 +61,7 @@ data Value = ValueTempId TempId
 data AttributeValue = AttributeValue Attribute Value
                     | ReverseAttributeValue Attribute Value
 
-data TempId = TempId Text Integer
+data TempId = TempId Keyword Integer
 
 data ExistingId = ExistingId Integer
 
@@ -199,9 +199,8 @@ valueDouble = ValueDouble
 
 -- Statements
 
--- | Create a new TempId. The argument is the part in which to create it but without 
---   \":db.part\/\". Example: newTempId \"user\".
-newTempId :: Text -> Transaction TempId
+-- | Create a new TempId in the given partition.
+newTempId :: Keyword -> Transaction TempId
 newTempId part = liftF (NewTempId part (\tempid -> tempid))
 
 -- | Add a triple to the database.
@@ -265,7 +264,7 @@ instance ToEDN Value where
     toEDN _ = error "Instance ToEDN Attribute not yet complete"
 
 instance ToEDN TempId where
-    toEDN (TempId part integer) = EDN.tag (T.encodeUtf8 "db") (T.encodeUtf8 "id") (EDN.makeVec [EDN.keyword (T.encodeUtf8 ("db.part/" <> part)),EDN.toEDN integer])
+    toEDN (TempId part integer) = EDN.tag (T.encodeUtf8 "db") (T.encodeUtf8 "id") (EDN.makeVec [EDN.toEDN part,EDN.toEDN integer])
 
 instance ToEDN ExistingId where
     toEDN (ExistingId integer) = EDN.toEDN integer

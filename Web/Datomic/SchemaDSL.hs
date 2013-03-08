@@ -5,6 +5,8 @@ import Web.Datomic.TransactionDSL
 
 import Data.Text
 
+import Control.Monad (forM)
+
 --ATTRIBUTES
 
 schema :: Keyword -> ValueType -> Cardinality -> [OptionalAttribute] -> Transaction TempId
@@ -71,8 +73,13 @@ partition partitionname = do
 
 --ENUMS
 
-enum :: Text -> [Text] -> Transaction TempId
-enum = undefined
+enum :: Keyword -> Keyword -> [Keyword] -> Transaction TempId
+enum part enumname enumvalues = do
+    enumid <- schema enumname TypeRef One []
+    forM enumvalues $ (\enumvalue -> do
+        enumvalueid <- newTempId part
+        add enumvalueid (key "db" "ident") enumvalue)
+    return enumid
 
 
 

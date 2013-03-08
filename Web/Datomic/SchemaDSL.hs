@@ -62,8 +62,12 @@ data OptionalAttribute = Doc
 
 --PARTITIONS
 
-partition :: Text -> Transaction TempId
-partition = undefined
+partition :: Keyword -> Transaction TempId
+partition partitionname = do
+    tempid <- newTempId (key "db.part" "db")
+    multiAdd tempid [key "db" "ident"             |~> partitionname,
+                     key "db.install" "partition" |<~ key "db.part" "db"]
+    return tempid
 
 --ENUMS
 

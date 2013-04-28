@@ -3,7 +3,7 @@ module Web.Datomic.REST (
     ServerAddress,StorageName,DatabaseName,
     createDatabase,CreationError(..),
     transact,TransactionResult,TransactionError(..),
-    q,Query,QueryInput,QueryResult,QueryError,
+    q,Query,QueryInput,QueryResult,QueryError(..),
     InteractionError(..),UrlError(..)) where
 
 import Network.URI (URI,parseRelativeReference,relativeTo)
